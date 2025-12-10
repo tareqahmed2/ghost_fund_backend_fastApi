@@ -84,27 +84,30 @@ def parse_messages_from_string(text: str):
 def is_saving_message(text: str) -> bool:
     """
     Decide if a message is actually a saving entry or not.
-    We:
-    - skip weekly total announcements (e.g. "My weekly ghost fund...")
+    - skip weekly total announcements
     - treat messages with currency+amount as saving
     - allow plain numeric messages as saving ("200")
+    - NEW: allow lines like "315 ; Walked instead of Rickshaw ..."
     """
     if not text:
         return False
 
     lower = text.lower().strip()
 
-    # 1) Explicitly skip weekly total announcements
-    #    e.g. "My weekly ghost fund by Thursday 9 pm : BDT 90"
+    # 1) skip weekly total announcements
     if "weekly ghost fund" in lower:
         return False
 
-    # 2) If we see at least one "<amount> + currency" combo -> valid saving
+    # 2) any "<amount> + currency" => saving
     if list(currency_amount_pattern.finditer(text)):
         return True
 
-    # 3) Fallback: message is just a plain number, e.g. "200"
-    #    (for people who only send numeric amount)
+    # 3) NEW: number at the beginning followed by ';' => saving
+    #    e.g. "315 ; Walked instead of Rickshaw ..."
+    if re.match(r"^\s*\d+\s*;", text):
+        return True
+
+    # 4) fallback: plain number like "200"
     if re.fullmatch(r"\d+", lower):
         return True
 
@@ -115,13 +118,13 @@ def extract_amount(text: str):
     """
     Extract numeric amount from a message.
     - If there are multiple "<amount> + currency" patterns, sum them.
-      e.g. "Saved 160 Tk and 80 Tk" => 240
+    - NEW: support "315 ; some reason" format.
     - Otherwise, if the whole text is just a number, return that.
     """
     if not text:
         return None
 
-    # 1) Try to find all "<amount> + currency" occurrences
+    # 1) currency + amount patterns
     matches = list(currency_amount_pattern.finditer(text))
     amounts: List[int] = []
 
@@ -129,7 +132,6 @@ def extract_amount(text: str):
         # Our regex has either group 2 (currency first) or group 3 (number first)
         num_str = m.group(2) or m.group(3)
         if num_str:
-            # remove any non-digit chars inside numbers, e.g. "1,200"
             num_clean = re.sub(r"[^\d]", "", num_str)
             try:
                 amounts.append(int(num_clean))
@@ -137,10 +139,18 @@ def extract_amount(text: str):
                 continue
 
     if amounts:
-        # Sum all amounts in the message
         return sum(amounts)
 
-    # 2) Fallback: if whole text is just a number like "200"
+    # 2) NEW: "315 ; Walked instead of Rickshaw ..."
+    m = re.match(r"^\s*([0-9][0-9,]*)\s*;", text)
+    if m:
+        num_clean = re.sub(r"[^\d]", "", m.group(1))
+        try:
+            return int(num_clean)
+        except ValueError:
+            pass
+
+    # 3) fallback: whole text just a number like "200"
     stripped = text.strip()
     if re.fullmatch(r"\d+", stripped):
         return int(stripped)
